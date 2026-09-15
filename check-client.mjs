@@ -215,6 +215,15 @@ globalThis.fetch = async (url, options) => {
 	fetches.push({ url, body: JSON.parse(options.body) })
 	const name = JSON.parse(options.body).file.name
 	if (name === 'missing.txt' || name === 'unstaged.bin') return { ok: true, json: async () => ({ status: 'not-found' }) }
+	if (name === 'choose.yml') {
+		return {
+			ok: true,
+			json: async () => ({
+				status: 'choose',
+				candidates: ['F:\\DSH\\out\\choose.yml', 'C:\\Users\\Huan\\Desktop\\choose.yml'],
+			}),
+		}
+	}
 	return { ok: true, json: async () => ({ status: 'found', path: `F:\\DSH\\inbox\\comfyui\\${name}` }) }
 }
 
@@ -349,6 +358,50 @@ assert.match(sendCalls.at(-1).text, /retry\.json/u)
 sendOutcome = { kind: 'success' }
 await conversation.sendSession({ sessionId: 'session-1' }, '再来', [], 'queue')
 assert.match(sendCalls.at(-1).text, /retry\.json/u, 'the failed attachment rides the retry')
+
+// --- an attachment that cannot ride the prompt is reported, not dropped ----
+//
+// The reported bug: a file present in two places under one name (same name, same
+// size) left the card in `choosing`, and the send boundary only expands `ready`
+// cards — so the attachment disappeared from the message while the strip still
+// showed it attached. Silence is the defect; the card and the send both speak up
+// now. The host resolves byte-identical copies on its own (see check-host.mjs),
+// which is the other half of the fix.
+
+const choosy = new File(['url: https://example.test/entry\n'], 'choose.yml', { type: '' })
+documentListeners.get('drop')({
+	dataTransfer: { types: ['Files'], files: [choosy], dropEffect: '', getData: () => '' },
+	preventDefault() {},
+	stopPropagation() {},
+	stopImmediatePropagation() {},
+	clientX: 10,
+	clientY: 10,
+})
+await new Promise((resolve) => setTimeout(resolve, 0))
+await new Promise((resolve) => setTimeout(resolve, 0))
+assert.equal(
+	stageCalls().filter((call) => call.name === 'choose.yml').length,
+	0,
+	'an ambiguous name is never silently copied to end the ambiguity',
+)
+
+notices.length = 0
+await conversation.sendSession({ sessionId: 'session-1' }, '看下这个条目', [], 'queue')
+assert.equal(sendCalls.at(-1).text, '看下这个条目', 'a card that is not ready contributes no mention')
+assert.equal(notices.length, 1, 'the send itself reports the attachment it had to leave behind')
+assert.equal(notices[0].level, 'error', 'it is loud enough to be seen')
+assert.match(notices[0].text, /1 个附件没有随本次消息发出/u)
+assert.match(notices[0].text, /choose\.yml/u, 'the report names the file')
+assert.match(notices[0].text, /同名文件有 2 个/u, 'and says which question is still open')
+assert.match(notices[0].text, /在卡片上选一个/u, 'and what to do about it')
+
+// The card survives the send it missed: an attachment that did not leave is
+// still attached, and the next attempt says so again.
+notices.length = 0
+await conversation.sendSession({ sessionId: 'session-1' }, '再发一次', [], 'queue')
+assert.equal(notices.length, 1, 'the unresolved card is still there for the next send')
+assert.match(notices[0].text, /choose\.yml/u)
+notices.length = 0
 
 // --- an unlocatable file is staged instead of refused ---------------------
 

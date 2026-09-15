@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
 	apply,
 	inject,
+	IDENTICAL_COMPARE_MAX_BYTES,
 	learnedRoots,
 	LOCATE_ROUTE,
 	MAX_STAGE_BYTES,
@@ -118,6 +119,43 @@ assert.equal(laterHit.path, join(outside, 'later-only.ndjson'))
 
 if (previousHome === undefined) delete process.env.DSH_HOME
 else process.env.DSH_HOME = previousHome
+
+// --- same-named copies: the bytes decide whether the user is asked ---------
+//
+// A card that is waiting to be told which of two files is meant is not `ready`,
+// and only a `ready` card rides the prompt. So asking about copies that hold the
+// same bytes did not just waste a click: it silently dropped the attachment from
+// the message, which is exactly what a user reported ("the yml does not go out
+// with the text"). Identical copies therefore resolve themselves. Genuinely
+// different files still ask, because guessing there would attach the wrong bytes.
+const twinRoot = join(fixturesRoot, 'twins')
+const twinLeft = join(twinRoot, 'left')
+const twinRight = join(twinRoot, 'right')
+await mkdir(twinLeft, { recursive: true })
+await mkdir(twinRight, { recursive: true })
+
+/** Locate one name that exists in both twin directories. */
+const twins = async (name, leftBytes, rightBytes) => {
+	await writeFile(join(twinLeft, name), leftBytes)
+	await writeFile(join(twinRight, name), rightBytes)
+	return locate({
+		file: { name, size: Buffer.byteLength(leftBytes) },
+		currentWorkspacePath: twinLeft,
+		workspacePaths: [twinLeft, twinRight],
+	})
+}
+
+const identical = await twins('entry.yml', 'url: https://example.test\n', 'url: https://example.test\n')
+assert.equal(identical.status, 'found', 'byte-identical copies resolve without asking')
+assert.equal(identical.path, join(twinLeft, 'entry.yml'), 'the copy inside the session workspace is preferred')
+
+const differing = await twins('twin.yml', 'url: https://example.test/one\n', 'url: https://example.test/two\n')
+assert.equal(differing.status, 'choose', 'same name and same size but different bytes still asks')
+assert.equal(differing.candidates.length, 2)
+
+const oversized = 'x'.repeat(IDENTICAL_COMPARE_MAX_BYTES + 1)
+const tooLarge = await twins('huge.yml', oversized, oversized)
+assert.equal(tooLarge.status, 'choose', 'identical but past the comparison ceiling asks rather than guesses')
 
 const first = await stage(workspace, 'workflow.json', Buffer.from('{"a":1}'))
 assert.equal(first.status, 'staged')

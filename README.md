@@ -18,6 +18,7 @@ you send.** The text box never receives a path — what you typed is all that is
 | Click **Retry** on a failed card | the locate/stage step runs again |
 | Attach more files than fit | gradient fades and arrow buttons scroll the strip one screen at a time |
 | Press Enter | the attached files are expanded into the prompt as references |
+| Press Enter while a card is still resolving or waiting on a pick | the notice names that attachment and says why, and the card stays |
 
 Up to **20 attachments per message**. A card shows what it is doing while it resolves:
 `preparing` → `locating the original path…` → `staging a copy…` → `referenced` or `copied into the workspace`.
@@ -25,14 +26,11 @@ Up to **20 attachments per message**. A card shows what it is doing while it res
 ## Install
 
 ```sh
-dsh plugin --profile web add github:RCYD857/857-dsh-file-attach
+dsh plugin --profile web add github:RCYD857/Huan857
 ```
 
 The package has no build step, so no `allowBuilds` approval is needed. Restart DSH afterwards and
 hard-refresh the page. To remove it: `dsh plugin --profile web remove dsh-file-attach`.
-
-`github:RCYD857/Huan857` also works — that is this repository's former name, and GitHub still
-redirects it to `857-dsh-file-attach`.
 
 For local development, link the source directory instead:
 
@@ -42,36 +40,6 @@ dsh plugin --profile web add link:/path/to/dsh-file-attach
 
 Requires a DSH profile with the Web client (`--profile web`). Developed and verified on DSH Desktop
 for Windows.
-
-### What the repository has to contain
-
-The plugin ships as source: no build step, no runtime dependency, nothing to compile. These four
-files are the whole plugin, and an install needs all of them.
-
-| Path | What the install needs it for |
-| --- | --- |
-| `package.json` | the package name, `dsh.bundle.patch` for the patch layer, `dsh.client` for the browser half |
-| `lib/index.js` | host half — the package entry (`main`) |
-| `lib/client.js` | browser half — reached through `exports["./client"]` |
-| `cordis.patch.yml` | the bundle patch that mounts the plugin into a profile |
-
-**`lib/` must be committed.** A repository holding only the top-level files still installs, and the
-bundle still mounts, but the plugin cannot load — no host routes, no attachment strip. Uploading
-through the GitHub web uploader drops folder contents unless the folder itself is dragged in.
-
-`package.json`'s `files` list decides what an install actually unpacks, so it has to keep naming
-`lib` and `cordis.patch.yml`. The dev scripts (`check-*.mjs`, `probe-*.mjs`, `read-report.mjs`) stay
-out of the installed package on purpose — they are for a clone, not for an install.
-
-### Checking an install
-
-```sh
-# 405 = the host half is loaded; 404 = the host never loaded it. Use your own GUI port.
-node -e "fetch('http://127.0.0.1:43129/file-attach/locate').then(r => console.log(r.status))"
-```
-
-`node read-report.mjs` prints the browser half's own checkpoints, which show whether the strip
-registered and mounted.
 
 ## How files reach the model
 
@@ -102,7 +70,10 @@ file-reference chip.
    produced a hit before (remembered in `<DSH_HOME>/file-attach-roots.json`, at most 24 of them).
    Each root is walked breadth-first with a depth limit of 5 and 20,000 entries visited, a 3 s budget
    for the search as a whole, and at most 20 candidates. Same-name candidates are narrowed by byte
-   size; if several remain, the card offers a picker.
+   size, then by content: copies holding identical bytes resolve themselves (the one inside the
+   session's workspace wins, so the model gets a path it can open), and only genuinely different
+   files make the card offer a picker. A card that is still unresolved when you send is named in the
+   prompt's notice — see [Nothing is dropped in silence](#nothing-is-dropped-in-silence).
 3. **A staged copy** — `POST /file-attach/stage`. The browser uploads the bytes and the host writes
    them to `<workspace>/.dsh-attachments/<name>`. This is the fallback that makes dropping always
    work: a browser is not obliged to reveal where a dropped file came from (Electron's drag payload
@@ -120,6 +91,29 @@ landed in `name-2`, so every drop created yet another file. Bytes are the only t
 a file: **a same-named file with different content always lands in a new copy (`name-2.ext`) and is
 never silently overwritten; only byte-identical content is reused.**
 
+### Nothing is dropped in silence
+
+Only a resolved card has a path to expand, so a card that is still locating, still staging, or
+waiting on a pick contributes nothing to the prompt. That used to happen without a word: a user
+attached a `.yml` that happened to exist in two places under the same name and the same size, the
+host answered `choose`, the card sat in the strip looking attached exactly like a resolved one, and
+the message went out carrying only the text. **The bug was the silence, not the pick.**
+
+Three things changed, at the layer each belongs to:
+
+- **The host decides when the answer cannot matter.** Same-name candidates are compared byte for
+  byte (bounded to 8 candidates and 4 MiB each, so a drop can never stall on it). If every candidate
+  holds the same bytes, the question is answered rather than asked. Past either bound the answer is
+  "not proven identical", which keeps the picker instead of guessing.
+- **The card stops looking ready.** A card awaiting a pick shows `同名文件有 2 个，请先选择` where a
+  resolved card shows `yml · 502 B`, so the state is legible without clicking anything.
+- **The send reports what it left behind.** The send boundary names every unresolved card — the file,
+  why it could not ride, and what to do — and keeps the card, so the next attempt carries it.
+
+Recorded in the suites: `check-host.mjs` pins identical-versus-different resolution (including the
+comparison ceiling falling back to the picker), `check-client.mjs` pins that an unresolved card adds
+no mention, raises the notice, and survives the send, and `check-spec.mjs` pins the card copy.
+
 ## The attachment strip
 
 - **Panel** — white `#ffffff`, 16 px radius, shadow `0 4px 16px rgb(0 0 0 / 8%)`, 12 px padding, 8 px row gap
@@ -129,7 +123,9 @@ never silently overwritten; only byte-identical content is reused.**
 - **Glyph colours** — documents `#1677ff`, code `#00a870`, archives `#d48806`, PDF/spreadsheet/slides `#d4380d`
 - **Image cards** — a 48 px square thumbnail, `object-fit: cover`
 - **States** — loading shows a spinner and "uploading…"; failure shows a `#fff1f0` surface with a
-  Retry button; drag hover outlines the panel in `#1677ff` with a drop hint
+  Retry button; a card awaiting a pick between same-named files replaces its `ext · size` subtitle
+  with the question rather than looking resolved; drag hover outlines the panel in `#1677ff` with a
+  drop hint
 - **Overflow** — `overflow-x: auto` with the native scrollbar hidden, plus gradient fades and arrow
   buttons that scroll one screen. Lanes are per edge: the strip only reserves space on a side that
   actually has an arrow, so there is never an empty gap at an edge with nothing to scroll.
@@ -254,18 +250,17 @@ MIT — see [LICENSE](LICENSE).
 | 失败卡片上点「重试」 | 重新走一遍定位/暂存 |
 | 附件多到放不下 | 渐变 + 箭头按钮，点击平滑滚动一屏 |
 | 直接回车发送 | 附件在发送那一刻展开成文件引用 |
+| 卡片还在处理中或等着你选路径时回车 | 提示会点名这个附件和原因，卡片保留 |
 
 一条消息最多 **20 个附件**。卡片会显示自己的处理状态：`准备中` → `正在定位原始路径…` → `正在暂存副本…` → `已引用本地文件` / `已附加（工作区副本）`。
 
 ### 安装
 
 ```sh
-dsh plugin --profile web add github:RCYD857/857-dsh-file-attach
+dsh plugin --profile web add github:RCYD857/Huan857
 ```
 
 这个包没有构建步骤，因此不需要 `allowBuilds` 构建授权。装完重启 DSH，再硬刷新页面。卸载：`dsh plugin --profile web remove dsh-file-attach`。
-
-`github:RCYD857/Huan857` 也能装——那是本仓库的旧名，GitHub 仍会跳到 `857-dsh-file-attach`。
 
 本地开发可以直接 link 源码目录：
 
@@ -274,30 +269,6 @@ dsh plugin --profile web add link:/path/to/dsh-file-attach
 ```
 
 需要一个带 Web 客户端的 DSH profile（`--profile web`）。本项目在 DSH Desktop（Windows）上开发与验证，对应的平台版本见 release notes。
-
-#### 仓库里必须有什么
-
-本插件以源码形式分发：没有构建步骤、没有运行时依赖、不需要编译。整个插件就是下面四个文件，装的时候一个都不能缺。
-
-| 路径 | 安装时为什么需要它 |
-| --- | --- |
-| `package.json` | 包名、`dsh.bundle.patch` 指向补丁层、`dsh.client` 声明浏览器半边 |
-| `lib/index.js` | 宿主半边——包的入口（`main`） |
-| `lib/client.js` | 浏览器半边——通过 `exports["./client"]` 找到 |
-| `cordis.patch.yml` | 把插件挂进 profile 的 bundle 补丁层 |
-
-**`lib/` 目录必须提交。** 只有顶层文件的仓库照样能装上、bundle 也照样挂载，但插件加载不起来——宿主路由没有，附件条也不会出现。用 GitHub 网页端上传时，不把文件夹本身拖进去，夹里的文件会丢。
-
-`package.json` 里的 `files` 字段决定安装包实际解出哪些文件，必须一直保留 `lib` 与 `cordis.patch.yml`。开发脚本（`check-*.mjs`、`probe-*.mjs`、`read-report.mjs`）是给 clone 用的，不会进安装包——这是有意为之。
-
-#### 装完怎么确认
-
-```sh
-# 405 = 宿主半边已加载；404 = 宿主从来没加载过它。端口换成你自己的 DSH Web GUI 端口
-node -e "fetch('http://127.0.0.1:43129/file-attach/locate').then(r => console.log(r.status))"
-```
-
-`node read-report.mjs` 会打印浏览器半边自己写回的检查点，可以直接看出附件条有没有注册并挂载。
 
 ### 文件怎么到模型手里
 
@@ -313,12 +284,24 @@ DSH 没有给插件通用的文件附件通道，只有图片通道。所以这�
 ### 路径从哪里来（三层，越靠前越保真）
 
 1. **拖拽载荷自带的路径。** 资源管理器会附 `text/uri-list`，直接就是用户原始文件的位置，不复制任何东西。
-2. **宿主侧的有界名字搜索** —— `POST /file-attach/locate`。搜索根依次为：当前工作区 → 其他工作区 → 各工作区下形如 `inbox`/`input`/`inputs`/`drops` 的收件目录 → `Desktop`/`Documents`/`Downloads` → 以前出过命中结果的目录（记在 `<DSH_HOME>/file-attach-roots.json`，最多 24 个）。每个根做广度优先遍历：深度上限 5、访问条目上限 20000；整个搜索的时间预算是 3 秒，候选上限 20 个。同名候选先按字节大小收窄，仍不唯一时由卡片上的下拉框让你选。
+2. **宿主侧的有界名字搜索** —— `POST /file-attach/locate`。搜索根依次为：当前工作区 → 其他工作区 → 各工作区下形如 `inbox`/`input`/`inputs`/`drops` 的收件目录 → `Desktop`/`Documents`/`Downloads` → 以前出过命中结果的目录（记在 `<DSH_HOME>/file-attach-roots.json`，最多 24 个）。每个根做广度优先遍历：深度上限 5、访问条目上限 20000；整个搜索的时间预算是 3 秒，候选上限 20 个。同名候选先按字节大小收窄，再按内容判定：字节完全相同的副本会自动选定（优先工作区里的那份，模型拿到的是它能直接打开的路径），只有内容确实不同的才让卡片弹出选择框。发送时仍未处理完的卡片会在提示里被点名，见 [不会静默丢弃](#不会静默丢弃)。
 3. **宿主暂存副本** —— `POST /file-attach/stage`。浏览器把文件字节交上来，宿主写进 `<工作区>/.dsh-attachments/<文件名>`。这是让拖拽**永远可用**的兜底：浏览器不保证透露拖入文件的来源（Electron 的拖拽载荷通常什么都不给），而文件内容本来就是模型最终要读的东西。
 
 暂存目录自带 `.gitignore`（内容 `*`），副本不会进版本控制。单文件上限 256 MiB，文件名做了穿越与非法字符清洗。卡片上带「副本」标记的表示走了这一层；整个 `.dsh-attachments` 随时可以删掉，不影响原件。
 
 **复用只按字节判定，并且扫描所有同名副本**（`name`、`name-2`、`name-3`…）。此前两条规则都是错的，已经被替换掉：只比文件大小，会在用户做出等长修改后让模型读到旧内容；只比第一个候选路径（`name`），一旦变更后的副本落在 `name-2` 就永远匹配不上，于是每次拖入都新建一份。字节是唯一能真正标识一个文件的东西：**同名不同内容一定落新副本（`name-2.ext`），绝不静默覆盖；只有字节完全相同才复用。**
+
+### 不会静默丢弃
+
+只有已经解析出路径的卡片才能展开成引用，所以还在定位、还在暂存、或者等着你选路径的卡片，对这次提示词没有任何贡献。**这件事以前是无声发生的**：用户附了一个 `.yml`，它恰好在两个地方各有一份、同名同大小，宿主回了 `choose`，卡片留在附件条里——外观和已就绪的卡片一模一样——于是消息只带着正文发了出去。**缺陷是"没说"，不是"要选"。**
+
+三处各修一层：
+
+- **宿主把"选了也没差别"的情况直接定下来。** 同名候选逐字节比较（上限 8 个候选、每个 4 MiB，拖拽因此永远不会被它拖住）。全部候选字节相同就直接给出结果，不再提问；超过任一上限就判定为"无法证明相同"，仍然保留选择框，而不是猜一个。
+- **卡片不再伪装成就绪。** 待选择的卡片副标题显示 `同名文件有 2 个，请先选择`，而已就绪的显示 `yml · 502 B`——不用点开任何东西就能看出状态。
+- **发送时点名没跟上的附件。** 发送边界会列出每一张未就绪的卡片：哪个文件、为什么没跟上、该怎么办，并且保留卡片，下一次发送就能带上。
+
+自检里都有对应的钉子：`check-host.mjs` 钉住"相同则自动定、不同则仍要问"（含超限回落为提问）；`check-client.mjs` 钉住未就绪卡片不产生引用、会发出提示、且发送后仍然存在；`check-spec.mjs` 钉住卡片文案。
 
 ### 附件条
 
@@ -327,7 +310,7 @@ DSH 没有给插件通用的文件附件通道，只有图片通道。所以这�
 - **信息卡** —— 左侧 36 px 图标区 + 右侧两行：文件名 14 px/500 `#1d1d1f`（超宽省略号），副标题 12 px `#86868b`，格式为「后缀 · 大小」（如 `json · 30 KB`）
 - **图标配色** —— 文档 `#1677ff`、代码 `#00a870`、压缩包 `#d48806`、PDF/表格/演示 `#d4380d`
 - **图片卡片** —— 48 px 正方形缩略图，`object-fit: cover`
-- **状态** —— 加载中转圈 +「上传中…」；失败为 `#fff1f0` 浅红底 + 「重试」按钮；拖拽悬停时面板描边变 `#1677ff` 并显示落点提示
+- **状态** —— 加载中转圈 +「上传中…」；失败为 `#fff1f0` 浅红底 + 「重试」按钮；同名待选择的卡片把副标题换成那句提问，而不是继续显示「后缀 · 大小」假装已就绪；拖拽悬停时面板描边变 `#1677ff` 并显示落点提示
 - **溢出** —— `overflow-x: auto` 且隐藏原生滚动条，配渐变遮罩与箭头按钮，点击滚动一屏。留白按边计算：只有真的有箭头的那一侧才留出空位，没有可滚内容的一侧不会出现空档。
 
 ### 诊断
