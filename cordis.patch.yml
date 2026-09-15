@@ -1,0 +1,10 @@
+# dsh-file-attach bundle patch: mount the composer file-attachment cards.
+#
+# Applied when this bundle appears in a profile's dsh.profile.bundles list.
+# The host half (package root) has no behaviour of its own; the browser half
+# (dsh.client) is discovered through the package's dsh.client declaration plus
+# exports["./client"].
+
+- insert:
+    - id: file-attach
+      name: 'dsh-file-attach'

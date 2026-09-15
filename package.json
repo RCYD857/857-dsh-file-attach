@@ -1,0 +1,50 @@
+{
+  "name": "dsh-file-attach",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drag or paste files into the DSH Web composer as attachment cards that preview on click and send with the prompt",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "check": "node check-client.mjs && node check-host.mjs && node check-spec.mjs && node probe-rail-render.mjs",
+    "check:spec": "node check-spec.mjs",
+    "check:render": "node probe-rail-render.mjs"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RCYD857/857-dsh-file-attach.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "attachment",
+    "drag-and-drop",
+    "paste",
+    "composer"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

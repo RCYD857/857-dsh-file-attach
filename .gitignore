@@ -1,0 +1,9 @@
+node_modules/
+.dsh-attachments/
+file-attach-report.json
+*.log
+
+# created by the self-check suites; they clean up after themselves, so this only
+# matters when one aborts part-way through
+.fixtures/
+.fixtures-host/
