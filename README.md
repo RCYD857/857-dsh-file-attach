@@ -38,7 +38,7 @@ never arrives as a file is named in the diagnostics instead of vanishing.
 ## Install
 
 ```sh
-dsh plugin --profile web add github:RCYD857/Huan857
+dsh plugin --profile web add github:RCYD857/857-dsh-file-attach
 ```
 
 The package has no build step, so no `allowBuilds` approval is needed. Restart DSH afterwards and
@@ -345,7 +345,7 @@ MIT — see [LICENSE](LICENSE).
 ### 安装
 
 ```sh
-dsh plugin --profile web add github:RCYD857/Huan857
+dsh plugin --profile web add github:RCYD857/857-dsh-file-attach
 ```
 
 这个包没有构建步骤，因此不需要 `allowBuilds` 构建授权。装完重启 DSH，再硬刷新页面。卸载：`dsh plugin --profile web remove dsh-file-attach`。
