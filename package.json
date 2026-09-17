@@ -1,8 +1,8 @@
 {
   "name": "dsh-file-attach",
-  "version": "0.1.0",
+  "version": "0.6.1",
   "private": true,
-  "description": "Drag or paste files into the DSH Web composer as attachment cards that preview on click and send with the prompt",
+  "description": "Drag or paste files or pictures into the DSH Web composer as one scrolling row of chips inside the input box — the form Doubao uses — with the files sent as @path references",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {

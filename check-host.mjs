@@ -1,5 +1,6 @@
 /** Host-half route wiring and staging checks (run with `node check-host.mjs`). */
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +16,7 @@ import {
 	STAGE_DIRECTORY,
 	STAGE_ROUTE,
 	locate,
+	safeFingerprint,
 	safeFileName,
 	stage,
 } from './lib/index.js'
@@ -135,11 +137,11 @@ await mkdir(twinLeft, { recursive: true })
 await mkdir(twinRight, { recursive: true })
 
 /** Locate one name that exists in both twin directories. */
-const twins = async (name, leftBytes, rightBytes) => {
+const twins = async (name, leftBytes, rightBytes, hash) => {
 	await writeFile(join(twinLeft, name), leftBytes)
 	await writeFile(join(twinRight, name), rightBytes)
 	return locate({
-		file: { name, size: Buffer.byteLength(leftBytes) },
+		file: { name, size: Buffer.byteLength(leftBytes), hash },
 		currentWorkspacePath: twinLeft,
 		workspacePaths: [twinLeft, twinRight],
 	})
@@ -153,9 +155,63 @@ const differing = await twins('twin.yml', 'url: https://example.test/one\n', 'ur
 assert.equal(differing.status, 'choose', 'same name and same size but different bytes still asks')
 assert.equal(differing.candidates.length, 2)
 
+assert.equal(safeFingerprint('a'.repeat(64)), 'a'.repeat(64), 'a well-formed fingerprint is accepted')
+assert.equal(safeFingerprint('A'.repeat(64)), undefined, 'upper-case hex is not a fingerprint this round')
+assert.equal(safeFingerprint('a'.repeat(63)), undefined, 'nor is a truncated one')
+assert.equal(safeFingerprint(undefined), undefined, 'and absence stays absent')
+
+// A file copied out of Explorer brings its bytes but no path. Those bytes are the
+// original's, so the fingerprint the browser sends decides which copy the user
+// means — the picker never appears, and the path is the one the file came from.
+{
+	const rightBytes = 'url: https://example.test/two\n'
+	const rightHash = createHash('sha256').update(rightBytes).digest('hex')
+	const claimed = await twins('twin.yml', 'url: https://example.test/one\n', rightBytes, rightHash)
+	assert.equal(claimed.status, 'found', 'a fingerprint matching one copy resolves without asking')
+	assert.equal(claimed.path, join(twinRight, 'twin.yml'), 'and it is that copy, not the workspace one')
+
+	const staleHash = createHash('sha256').update('url: https://example.test/three\n').digest('hex')
+	const unmatched = await twins('twin.yml', 'url: https://example.test/one\n', rightBytes, staleHash)
+	assert.equal(unmatched.status, 'choose', 'a fingerprint matching nothing keeps the picker instead of guessing')
+
+	const malformed = await twins('twin.yml', 'url: https://example.test/one\n', rightBytes, 'not-a-hash')
+	assert.equal(malformed.status, 'choose', 'an unparsable fingerprint is ignored, not trusted')
+}
+
 const oversized = 'x'.repeat(IDENTICAL_COMPARE_MAX_BYTES + 1)
 const tooLarge = await twins('huge.yml', oversized, oversized)
 assert.equal(tooLarge.status, 'choose', 'identical but past the comparison ceiling asks rather than guesses')
+
+// --- folders are candidates too --------------------------------------------
+//
+// A folder dropped from Explorer arrives as a nameless, pathless, empty entry, so
+// the name search is the only way to find it. Matching files only is what produced
+// the dead end "a folder cannot be attached: the machine never gave its original
+// path" — for a folder that was sitting right there on the Desktop.
+{
+	// A name the real Desktop cannot collide with: the fallback roots include the
+	// machine's own Desktop, and this suite runs on a machine that has one.
+	const folderName = 'folder-case-7b21'
+	const folder = join(twinLeft, folderName)
+	await mkdir(join(folder, 'inner'), { recursive: true })
+	const hit = await locate({
+		file: { name: folderName, size: 0 },
+		currentWorkspacePath: twinLeft,
+		workspacePaths: [twinLeft],
+	})
+	assert.equal(hit.status, 'found', 'a dropped folder resolves to its own path')
+	assert.equal(hit.path, folder, 'and the path is the folder, not something inside it')
+
+	// A same-named file next to it is an honest ambiguity: the folder reports no
+	// size and carries no fingerprint, so neither can be proven to be the one.
+	await writeFile(join(twinRight, folderName), '')
+	const ambiguous = await locate({
+		file: { name: folderName, size: 0 },
+		currentWorkspacePath: twinLeft,
+		workspacePaths: [twinLeft, twinRight],
+	})
+	assert.equal(ambiguous.status, 'choose', 'a folder and an empty file of the same name still ask')
+}
 
 const first = await stage(workspace, 'workflow.json', Buffer.from('{"a":1}'))
 assert.equal(first.status, 'staged')
